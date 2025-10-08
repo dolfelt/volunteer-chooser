@@ -36,7 +36,7 @@ type FieldTripConfig struct {
 }
 
 func main() {
-	inputFile := flag.String("input", "kindergarten-field-trip-2025.xlsx", "Input XLSX file")
+	inputFile := flag.String("input", "input.xlsx", "Input XLSX file")
 	outputFile := flag.String("output", "output.xlsx", "Output XLSX file")
 	seed := flag.Int64("seed", 42, "Random seed")
 	flag.Parse()
@@ -469,6 +469,10 @@ func writeOutput(filename string, assignments map[string]map[string][]Volunteer,
 	for _, trip := range fieldTrips {
 		teacherAssignments := assignments[trip.Name]
 		sheetName := sanitizeSheetName(trip.Name)
+
+		if idx, _ := f.GetSheetIndex(sheetName); idx >= 0 {
+			sheetName = sheetName[:len(sheetName)-2] + " 2"
+		}
 
 		f.NewSheet(sheetName)
 
