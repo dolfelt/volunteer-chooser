@@ -89,6 +89,9 @@ func readInput(filename string) ([]Volunteer, []PartyConfig, []FieldTripConfig, 
 		return nil, nil, nil, nil, err
 	}
 
+	// Merge volunteers with same last name and teacher
+	volunteers = mergeVolunteersByLastName(volunteers)
+
 	return volunteers, parties, fieldTrips, allTeachers, nil
 }
 
@@ -558,7 +561,8 @@ func writeEventSheet(f *excelize.File, sheetName string, event EventConfig, teac
 				f.SetCellStyle(sheetName, fmt.Sprintf("A%d", row), fmt.Sprintf("D%d", row), alternateStyle)
 
 			}
-			f.SetRowHeight(sheetName, row, 20)
+			lines := max(strings.Count(v.Email, "\n"), strings.Count(v.Phone, "\n")) + 1
+			f.SetRowHeight(sheetName, row, float64(12*lines)+8)
 			row++
 
 			// Check to see if we are at the end and need more rows
@@ -567,7 +571,10 @@ func writeEventSheet(f *excelize.File, sheetName string, event EventConfig, teac
 				if i < event.Count-1 {
 					addCnt := event.Count - i - 1
 					f.SetCellStyle(sheetName, fmt.Sprintf("A%d", row), fmt.Sprintf("D%d", row+addCnt), volunteerStyle)
-					row += addCnt
+					for x := 0; x < addCnt; x++ {
+						f.SetRowHeight(sheetName, row, 20)
+						row++
+					}
 				}
 			}
 		}
@@ -633,6 +640,142 @@ func parseInt(s string) int {
 func nameKey(name string) string {
 	return strings.ToLower(name)
 }
+
+func getLastName(fullName string) string {
+	parts := strings.Fields(strings.TrimSpace(fullName))
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[len(parts)-1]
+}
+
+func mergeVolunteersByLastName(volunteers []Volunteer) []Volunteer {
+	// Group volunteers by lastName + teacher + contact info
+	type groupKey struct {
+		lastName string
+		teacher  string
+	}
+
+	groups := make(map[groupKey][]Volunteer)
+
+	for _, v := range volunteers {
+		lastName := getLastName(v.Name)
+		key := groupKey{
+			lastName: strings.ToLower(lastName),
+			teacher:  v.Teacher,
+		}
+		groups[key] = append(groups[key], v)
+	}
+
+	// Create merged volunteer list
+	var merged []Volunteer
+	processed := make(map[groupKey]bool)
+
+	for _, v := range volunteers {
+		lastName := getLastName(v.Name)
+		key := groupKey{
+			lastName: strings.ToLower(lastName),
+			teacher:  v.Teacher,
+		}
+
+		// Skip if already processed this group
+		if processed[key] {
+			continue
+		}
+		processed[key] = true
+
+		group := groups[key]
+
+		// If only one volunteer in this group, add as-is
+		if len(group) == 1 {
+			merged = append(merged, group[0])
+			continue
+		}
+
+		// Merge multiple volunteers with same last name and teacher
+		// Collect first names and contact info
+		var firstNames []string
+		var emails []string
+		var phones []string
+
+		for _, vol := range group {
+			// Extract first name(s) - everything except the last word
+			parts := strings.Fields(strings.TrimSpace(vol.Name))
+			if len(parts) > 1 {
+				firstName := strings.Join(parts[:len(parts)-1], " ")
+				// Add if not already in list
+				found := false
+				for _, existing := range firstNames {
+					if strings.EqualFold(existing, firstName) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					firstNames = append(firstNames, firstName)
+				}
+			}
+
+			// Collect unique emails
+			if vol.Email != "" {
+				found := false
+				for _, existing := range emails {
+					if strings.EqualFold(existing, vol.Email) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					emails = append(emails, vol.Email)
+				}
+			}
+
+			// Collect unique phones
+			if vol.Phone != "" {
+				found := false
+				num := FormatPhoneNumber(vol.Phone)
+				for _, existing := range phones {
+					if existing == num {
+						found = true
+						break
+					}
+				}
+				if !found {
+					phones = append(phones, num)
+				}
+			}
+		}
+
+		// Build merged volunteer
+		mergedVol := group[0]
+		mergedVol.Name = strings.Join(firstNames, " or ") + " " + lastName
+		mergedVol.Email = strings.Join(emails, "\n")
+		mergedVol.Phone = strings.Join(phones, "\n")
+
+		// Collect all unique events
+		eventSet := make(map[string]bool)
+		var allEvents []Volunteer
+
+		for _, vol := range group {
+			eventKey := vol.EventType + ":" + vol.EventName
+			if !eventSet[eventKey] {
+				eventSet[eventKey] = true
+				// Create a copy with merged contact info
+				mergedEvent := vol
+				mergedEvent.Name = mergedVol.Name
+				mergedEvent.Email = mergedVol.Email
+				mergedEvent.Phone = mergedVol.Phone
+				allEvents = append(allEvents, mergedEvent)
+			}
+		}
+
+		// Add all unique events for this merged volunteer
+		merged = append(merged, allEvents...)
+	}
+
+	return merged
+}
+
 func sanitizeSheetName(name string) string {
 	name = strings.ReplaceAll(name, "/", "-")
 	name = strings.ReplaceAll(name, "\\", "-")
