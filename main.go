@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -24,15 +25,16 @@ type Volunteer struct {
 	Alternate bool
 }
 
-type PartyConfig struct {
+type EventConfig struct {
 	Name  string
 	Count int // Same count for all teachers
 }
 
+type PartyConfig EventConfig
+
 type FieldTripConfig struct {
-	Name     string
+	EventConfig
 	Teachers []string
-	Count    int // Same count for all applicable teachers
 }
 
 func main() {
@@ -229,9 +231,11 @@ func readVariables(f *excelize.File) ([]PartyConfig, []FieldTripConfig, error) {
 			}
 
 			fieldTrips = append(fieldTrips, FieldTripConfig{
-				Name:     strings.TrimSpace(row[2]),
+				EventConfig: EventConfig{
+					Name:  strings.TrimSpace(row[2]),
+					Count: parseInt(row[4]),
+				},
 				Teachers: teachers,
-				Count:    parseInt(row[4]),
 			})
 		}
 	}
@@ -265,10 +269,11 @@ func assignVolunteers(volunteers []Volunteer, parties []PartyConfig, fieldTrips 
 				if assigned >= party.Count {
 					break
 				}
-				if !usedForParty[v.Name] {
+				name := nameKey(v.Name)
+				if !usedForParty[name] {
 					assignments[party.Name][teacher] = append(assignments[party.Name][teacher], v)
-					usedForParty[v.Name] = true
-					usedForThisEvent[party.Name][v.Name] = true
+					usedForParty[name] = true
+					usedForThisEvent[party.Name][name] = true
 					assigned++
 				}
 			}
@@ -299,10 +304,11 @@ func assignVolunteers(volunteers []Volunteer, parties []PartyConfig, fieldTrips 
 				if assigned >= trip.Count {
 					break
 				}
-				if !usedForFieldTrip[v.Name] {
+				name := nameKey(v.Name)
+				if !usedForFieldTrip[name] {
 					assignments[trip.Name][teacher] = append(assignments[trip.Name][teacher], v)
-					usedForFieldTrip[v.Name] = true
-					usedForThisEvent[trip.Name][v.Name] = true
+					usedForFieldTrip[name] = true
+					usedForThisEvent[trip.Name][name] = true
 
 					assigned++
 				}
@@ -328,12 +334,13 @@ func assignVolunteers(volunteers []Volunteer, parties []PartyConfig, fieldTrips 
 				if assigned >= 2 {
 					break
 				}
-				usedForThisEvent := usedForThisEvent[party.Name][v.Name]
+				name := nameKey(v.Name)
+				usedForThisEvent := usedForThisEvent[party.Name][name]
 				// Skip if already assigned as primary or alternate
-				if (!unique || !usedForParty[v.Name]) && !usedForThisEvent && !usedAsAlternate[v.Name] {
+				if (!unique || !usedForParty[name]) && !usedForThisEvent && !usedAsAlternate[name] {
 					v.Alternate = true
 					assignments[party.Name][teacher] = append(assignments[party.Name][teacher], v)
-					usedAsAlternate[v.Name] = true
+					usedAsAlternate[name] = true
 					assigned++
 				}
 			}
@@ -367,12 +374,13 @@ func assignVolunteers(volunteers []Volunteer, parties []PartyConfig, fieldTrips 
 				if assigned >= 2 {
 					break
 				}
-				usedForThisEvent := usedForThisEvent[trip.Name][v.Name]
+				name := nameKey(v.Name)
+				usedForThisEvent := usedForThisEvent[trip.Name][name]
 				// Skip if already assigned as primary or alternate
-				if (!unique || !usedForFieldTrip[v.Name]) && !usedForThisEvent && !usedAsAlternateTrip[v.Name] {
+				if (!unique || !usedForFieldTrip[name]) && !usedForThisEvent && !usedAsAlternateTrip[name] {
 					v.Alternate = true
 					assignments[trip.Name][teacher] = append(assignments[trip.Name][teacher], v)
-					usedAsAlternateTrip[v.Name] = true
+					usedAsAlternateTrip[name] = true
 					assigned++
 				}
 			}
@@ -460,7 +468,7 @@ func writeOutput(filename string, assignments map[string]map[string][]Volunteer,
 			f.NewSheet(sheetName)
 		}
 
-		writeEventSheet(f, sheetName, party.Name, teacherAssignments, party.Count, titleStyle, headerStyle, teacherHeaderStyle, volunteerStyle, alternateDividerStyle, alternateStyle)
+		writeEventSheet(f, sheetName, EventConfig(party), teacherAssignments, party.Count, titleStyle, headerStyle, teacherHeaderStyle, volunteerStyle, alternateDividerStyle, alternateStyle)
 
 		index++
 	}
@@ -476,7 +484,7 @@ func writeOutput(filename string, assignments map[string]map[string][]Volunteer,
 
 		f.NewSheet(sheetName)
 
-		writeEventSheet(f, sheetName, trip.Name, teacherAssignments, trip.Count, titleStyle, headerStyle, teacherHeaderStyle, volunteerStyle, alternateDividerStyle, alternateStyle)
+		writeEventSheet(f, sheetName, trip.EventConfig, teacherAssignments, trip.Count, titleStyle, headerStyle, teacherHeaderStyle, volunteerStyle, alternateDividerStyle, alternateStyle)
 
 		index++
 	}
@@ -484,10 +492,10 @@ func writeOutput(filename string, assignments map[string]map[string][]Volunteer,
 	return f.SaveAs(filename)
 }
 
-func writeEventSheet(f *excelize.File, sheetName, realName string, teacherAssignments map[string][]Volunteer, primaryCount int, titleStyle, headerStyle, teacherHeaderStyle, volunteerStyle, alternateDividerStyle, alternateStyle int) {
+func writeEventSheet(f *excelize.File, sheetName string, event EventConfig, teacherAssignments map[string][]Volunteer, primaryCount int, titleStyle, headerStyle, teacherHeaderStyle, volunteerStyle, alternateDividerStyle, alternateStyle int) {
 
 	f.SetRowHeight(sheetName, 1, 36)
-	f.SetCellValue(sheetName, "A1", realName)
+	f.SetCellValue(sheetName, "A1", event.Name)
 	f.MergeCell(sheetName, "A1", "D1")
 	f.SetCellStyle(sheetName, "A1", "D1", titleStyle)
 
@@ -542,7 +550,7 @@ func writeEventSheet(f *excelize.File, sheetName, realName string, teacherAssign
 
 			f.SetCellValue(sheetName, fmt.Sprintf("A%d", row), teacher)
 			f.SetCellValue(sheetName, fmt.Sprintf("B%d", row), v.Name)
-			f.SetCellValue(sheetName, fmt.Sprintf("C%d", row), v.Phone)
+			f.SetCellValue(sheetName, fmt.Sprintf("C%d", row), FormatPhoneNumber(v.Phone))
 			f.SetCellValue(sheetName, fmt.Sprintf("D%d", row), v.Email)
 			if !v.Alternate {
 				f.SetCellStyle(sheetName, fmt.Sprintf("A%d", row), fmt.Sprintf("D%d", row), volunteerStyle)
@@ -552,6 +560,16 @@ func writeEventSheet(f *excelize.File, sheetName, realName string, teacherAssign
 			}
 			f.SetRowHeight(sheetName, row, 20)
 			row++
+
+			// Check to see if we are at the end and need more rows
+			// or if we're moving on to the alternates
+			if !prevAlternate && (len(volunteers) <= i+1 || volunteers[i+1].Alternate) {
+				if i < event.Count-1 {
+					addCnt := event.Count - i - 1
+					f.SetCellStyle(sheetName, fmt.Sprintf("A%d", row), fmt.Sprintf("D%d", row+addCnt), volunteerStyle)
+					row += addCnt
+				}
+			}
 		}
 
 		// Spacing between teachers
@@ -560,6 +578,31 @@ func writeEventSheet(f *excelize.File, sheetName, realName string, teacherAssign
 }
 
 // Helper functions
+
+func FormatPhoneNumber(input string) string {
+	// Strip all non-digit characters
+	var digits strings.Builder
+	for _, char := range input {
+		if unicode.IsDigit(char) {
+			digits.WriteRune(char)
+		}
+	}
+
+	phoneDigits := digits.String()
+
+	// Check for exactly 10 digits
+	if len(phoneDigits) != 10 {
+		return input
+	}
+
+	// Format as (xxx) xxx-xxxx
+	formatted := fmt.Sprintf("(%s) %s-%s",
+		phoneDigits[0:3],
+		phoneDigits[3:6],
+		phoneDigits[6:10])
+
+	return formatted
+}
 
 func filterVolunteersByEvent(volunteers []Volunteer, eventType, eventName string) []Volunteer {
 	var filtered []Volunteer
@@ -587,6 +630,9 @@ func parseInt(s string) int {
 	return i
 }
 
+func nameKey(name string) string {
+	return strings.ToLower(name)
+}
 func sanitizeSheetName(name string) string {
 	name = strings.ReplaceAll(name, "/", "-")
 	name = strings.ReplaceAll(name, "\\", "-")
